@@ -120,7 +120,7 @@ func (t Type) Column() (Interface, error) {
 	}
 
 	switch strType := string(t); {
-	case strings.HasPrefix(string(t), "Map("):
+	case strings.HasPrefix(string(t), "Map(") || strings.HasPrefix(string(t), "MapV2("):
 		return (&Map{}).parse(t)
 	case strings.HasPrefix(string(t), "Tuple("):
 		return (&Tuple{}).parse(t)
