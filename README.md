@@ -2,6 +2,18 @@
 
 Golang SQL database driver for [ClickHouse](https://clickhouse.com/).
 
+## Versions
+
+There are two version of this driver, v1 and v2, available as separate branches. 
+
+**v1 is now in a state of a maintenance - we will only accept PRs for bug and security fixes.**
+
+Users should use v2 which is production ready and [significantly faster than v1](#benchmark).
+
+## Supported ClickHouse Versions
+
+The driver is tested against the currently [supported versions](https://github.com/ClickHouse/ClickHouse/blob/master/SECURITY.md) of ClickHouse
+
 ## Key features
 
 * Uses native ClickHouse TCP client-server protocol
@@ -117,20 +129,34 @@ go get -u github.com/ClickHouse/clickhouse-go/v2
 * [bind params](examples/std/bind/main.go)
 
 
-## Alternatives
+#### A Note on TLS/SSL
 
-* Database drivers
+At a low level all driver connect methods (DSN/OpenDB/Open) will use the [Go tls package](https://pkg.go.dev/crypto/tls) to establish a secure connection. The driver knows to use TLS if the Options struct contains a non-nil tls.Config pointer.
+
+Setting secure in the DSN creates a minimal tls.Config struct with only the InsecureSkipVerify field set (either true or false).  It is equivalent to this code:
+
+```go
+conn := clickhouse.OpenDB(&clickhouse.Options{
+	...
+    TLS: &tls.Config{
+            InsecureSkipVerify: false
+	}
+	...
+    })
+```
+This minimal tls.Config is normally all that is necessary to connect to the secure native port (normally 9440) on a ClickHouse server. If the ClickHouse server does not have a valid certificate (expired, wrong host name, not signed by a publicly recognized root Certificate Authority), InsecureSkipVerify can be to `true`, but that is strongly discouraged.
+
+If additional TLS parameters are necessary the application code should set the desired fields in the tls.Config struct. That can include specific cipher suites, forcing a particular TLS version (like 1.2 or 1.3), adding an internal CA certificate chain, adding a client certificate (and private key) if required by the ClickHouse server, and most of the other options that come with a more specialized security setup.
+
+## Third-party alternatives
+
+* Database drivers:
 	* [mailru/go-clickhouse](https://github.com/mailru/go-clickhouse) (uses the HTTP protocol)
 	* [uptrace/go-clickhouse](https://github.com/uptrace/go-clickhouse) (uses the native TCP protocol with `database/sql`-like API)
-	* drivers with columnar interface :
+	* Drivers with columnar interface:
 		* [vahid-sohrabloo/chconn](https://github.com/vahid-sohrabloo/chconn)
 		* [go-faster/ch](https://github.com/go-faster/ch)
 
 * Insert collectors:
 	* [KittenHouse](https://github.com/YuriyNasretdinov/kittenhouse)
 	* [nikepan/clickhouse-bulk](https://github.com/nikepan/clickhouse-bulk)
-
-### Useful projects
-
-* [clickhouse-backup](https://github.com/AlexAkulov/clickhouse-backup)
-* [go-graphite](https://github.com/go-graphite)

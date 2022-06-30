@@ -120,16 +120,114 @@ func TestBindNamed(t *testing.T) {
 	}
 }
 
+func TestBindPositional(t *testing.T) {
+	_, err := bind(time.Local, `
+	SELECT * FROM t WHERE col = ?
+		AND col2 = ?
+		AND col3 = ?
+		ANS col4 = ?
+		AND null_coll = ?
+	)
+	`, 1, 2, 1, "I'm a string param", nil)
+	if assert.NoError(t, err) {
+		assets := []struct {
+			query    string
+			params   []interface{}
+			expected string
+		}{
+			{
+				query:    "SELECT ?",
+				params:   []interface{}{1},
+				expected: "SELECT 1",
+			},
+			{
+				query:    "SELECT ? ? ?",
+				params:   []interface{}{1, 2, 3},
+				expected: "SELECT 1 2 3",
+			},
+			{
+				query:    "SELECT ? ? ?",
+				params:   []interface{}{"a", "b", "c"},
+				expected: "SELECT 'a' 'b' 'c'",
+			},
+			{
+				query:    "SELECT ? ? '\\?'",
+				params:   []interface{}{"a", "b"},
+				expected: "SELECT 'a' 'b' '?'",
+			},
+			{
+				query:    "SELECT x where col = 'blah\\?' AND col2 = ?",
+				params:   []interface{}{"a"},
+				expected: "SELECT x where col = 'blah?' AND col2 = 'a'",
+			},
+		}
+
+		for _, asset := range assets {
+			if actual, err := bind(time.Local, asset.query, asset.params...); assert.NoError(t, err) {
+				assert.Equal(t, asset.expected, actual)
+			}
+		}
+	}
+
+	_, err = bind(time.Local, `
+	SELECT * FROM t WHERE col = ?
+		AND col2 = ?
+		AND col3 = ?
+		ANS col4 = ?
+		AND null_coll = ?
+	)
+	`, 1, 2, "I'm a string param", nil)
+	assert.Error(t, err)
+}
+
 func TestFormatTime(t *testing.T) {
 	var (
 		t1, _   = time.Parse("2006-01-02 15:04:05", "2022-01-12 15:00:00")
 		tz, err = time.LoadLocation("Europe/London")
 	)
 	if assert.NoError(t, err) {
-		if assert.Equal(t, "toDateTime('2022-01-12 15:00:00')", format(t1.Location(), t1)) {
-			assert.Equal(t, "toDateTime('2022-01-12 15:00:00', 'UTC')", format(tz, t1))
+		val, _ := format(t1.Location(), Seconds, t1)
+		if assert.Equal(t, "toDateTime('2022-01-12 15:00:00')", val) {
+			val, _ = format(tz, Seconds, t1)
+			assert.Equal(t, "toDateTime('2022-01-12 15:00:00', 'UTC')", val)
 		}
 	}
+}
+
+func TestFormatScaledTime(t *testing.T) {
+	var (
+		t1, _   = time.Parse("2006-01-02 15:04:05.000000000", "2022-01-12 15:00:00.123456789")
+		tz, err = time.LoadLocation("Europe/London")
+	)
+	require.NoError(t, err)
+	// seconds
+	val, _ := format(t1.Location(), Seconds, t1)
+	require.Equal(t, "toDateTime('2022-01-12 15:00:00')", val)
+	val, _ = format(t1.Location(), Seconds, t1.In(time.Now().Location()))
+	require.Equal(t, "toDateTime('1641999600')", val)
+	val, _ = format(tz, Seconds, t1)
+	require.Equal(t, "toDateTime('2022-01-12 15:00:00', 'UTC')", val)
+	// milliseconds
+	val, _ = format(t1.Location(), MilliSeconds, t1)
+	require.Equal(t, "toDateTime64('2022-01-12 15:00:00.123', 3)", val)
+	val, _ = format(t1.Location(), MilliSeconds, t1.In(time.Now().Location()))
+	require.Equal(t, "toDateTime64('1641999600123', 3)", val)
+	val, _ = format(tz, MilliSeconds, t1)
+	require.Equal(t, "toDateTime64('2022-01-12 15:00:00.123', 3, 'UTC')", val)
+	// microseconds
+	val, _ = format(t1.Location(), MicroSeconds, t1)
+	require.Equal(t, "toDateTime64('2022-01-12 15:00:00.123456', 6)", val)
+	val, _ = format(t1.Location(), MicroSeconds, t1.In(time.Now().Location()))
+	require.Equal(t, "toDateTime64('1641999600123456', 6)", val)
+	val, _ = format(tz, MicroSeconds, t1)
+	require.Equal(t, "toDateTime64('2022-01-12 15:00:00.123456', 6, 'UTC')", val)
+	// nanoseconds
+	val, _ = format(t1.Location(), NanoSeconds, t1)
+	require.Equal(t, "toDateTime64('2022-01-12 15:00:00.123456789', 9)", val)
+	val, _ = format(t1.Location(), NanoSeconds, t1.In(time.Now().Location()))
+	require.Equal(t, "toDateTime64('1641999600123456789', 9)", val)
+	val, _ = format(tz, NanoSeconds, t1)
+	require.Equal(t, "toDateTime64('2022-01-12 15:00:00.123456789', 9, 'UTC')", val)
 }
 
 func TestStringBasedType(t *testing.T) {
@@ -137,19 +235,25 @@ func TestStringBasedType(t *testing.T) {
 		SupperString       string
 		SupperSupperString string
 	)
-	require.Equal(t, "'a'", format(time.UTC, SupperString("a")))
-	require.Equal(t, "'a'", format(time.UTC, SupperSupperString("a")))
-	require.Equal(t, "'a', 'b', 'c'", format(time.UTC, []SupperSupperString{"a", "b", "c"}))
+	val, _ := format(time.UTC, Seconds, SupperString("a"))
+	require.Equal(t, "'a'", val)
+	val, _ = format(time.UTC, Seconds, SupperSupperString("a"))
+	require.Equal(t, "'a'", val)
+	val, _ = format(time.UTC, Seconds, []SupperSupperString{"a", "b", "c"})
+	require.Equal(t, "'a', 'b', 'c'", val)
 }
 
-func TestFormatTuple(t *testing.T) {
-	assert.Equal(t, "('A', 1)", format(time.UTC, []interface{}{"A", 1}))
+func TestFormatGroup(t *testing.T) {
+	groupSet := GroupSet{Value: []interface{}{"A", 1}}
+	val, _ := format(time.UTC, Seconds, groupSet)
+	assert.Equal(t, "('A', 1)", val)
 	{
-		tuples := [][]interface{}{
-			[]interface{}{"A", 1},
-			[]interface{}{"B", 2},
+		tuples := []GroupSet{
+			{Value: []interface{}{"A", 1}},
+			{Value: []interface{}{"B", 2}},
 		}
-		assert.Equal(t, "('A', 1), ('B', 2)", format(time.UTC, tuples))
+		val, _ = format(time.UTC, Seconds, tuples)
+		assert.Equal(t, "('A', 1), ('B', 2)", val)
 	}
 }
 
@@ -164,6 +268,23 @@ func BenchmarkBindNumeric(b *testing.B) {
 			AND null_coll = $4
 		)
 		`, 1, 2, "I'm a string param", nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBindPositional(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, err := bind(time.Local, `
+		SELECT * FROM t WHERE col = ?
+			AND col2 = ?
+			AND col3 = ?
+			ANS col4 = ?
+			AND null_coll = ?
+		)
+		`, 1, 2, 1, "I'm a string param", nil)
 		if err != nil {
 			b.Fatal(err)
 		}

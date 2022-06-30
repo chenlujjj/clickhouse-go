@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
+	ldriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 var globalConnID int64
@@ -47,14 +48,31 @@ func (o *stdConnOpener) Connect(ctx context.Context) (_ driver.Conn, err error) 
 		return nil, o.err
 	}
 	var (
-		conn   *connect
-		connID = int(atomic.AddInt64(&globalConnID, 1))
+		conn     stdConnect
+		connID   = int(atomic.AddInt64(&globalConnID, 1))
+		dialFunc func(ctx context.Context, addr string, num int, opt *Options) (stdConnect, error)
 	)
-	for num := range o.opt.Addr {
-		if o.opt.ConnOpenStrategy == ConnOpenRoundRobin {
-			num = int(connID) % len(o.opt.Addr)
+
+	switch o.opt.Interface {
+	case HttpInterface:
+		dialFunc = func(ctx context.Context, addr string, num int, opt *Options) (stdConnect, error) {
+			return dialHttp(ctx, addr, num, o.opt)
 		}
-		if conn, err = dial(ctx, o.opt.Addr[num], connID, o.opt); err == nil {
+	default:
+		dialFunc = func(ctx context.Context, addr string, num int, opt *Options) (stdConnect, error) {
+			return dial(ctx, addr, num, o.opt)
+		}
+	}
+
+	for i := range o.opt.Addr {
+		var num int
+		switch o.opt.ConnOpenStrategy {
+		case ConnOpenInOrder:
+			num = i
+		case ConnOpenRoundRobin:
+			num = (int(connID) + i) % len(o.opt.Addr)
+		}
+		if conn, err = dialFunc(ctx, o.opt.Addr[num], connID, o.opt); err == nil {
 			return &stdDriver{
 				conn: conn,
 			}, nil
@@ -89,16 +107,27 @@ func OpenDB(opt *Options) *sql.DB {
 	})
 }
 
+type stdConnect interface {
+	isBad() bool
+	close() error
+	query(ctx context.Context, release func(*connect, error), query string, args ...interface{}) (*rows, error)
+	exec(ctx context.Context, query string, args ...interface{}) error
+	ping(ctx context.Context) (err error)
+	prepareBatch(ctx context.Context, query string, release func(*connect, error)) (ldriver.Batch, error)
+	asyncInsert(ctx context.Context, query string, wait bool) error
+}
+
 type stdDriver struct {
-	conn   *connect
+	conn   stdConnect
 	commit func() error
 }
 
-func (d *stdDriver) Open(dsn string) (_ driver.Conn, err error) {
+func (std *stdDriver) Open(dsn string) (_ driver.Conn, err error) {
 	var opt Options
 	if err := opt.fromDSN(dsn); err != nil {
 		return nil, err
 	}
+	opt.setDefaults()
 	return (&stdConnOpener{opt: &opt}).Connect(context.Background())
 }
 
@@ -172,7 +201,7 @@ func (std *stdDriver) PrepareContext(ctx context.Context, query string) (driver.
 func (std *stdDriver) Close() error { return std.conn.close() }
 
 type stdBatch struct {
-	batch *batch
+	batch ldriver.Batch
 }
 
 func (s *stdBatch) NumInput() int { return -1 }
